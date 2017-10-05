@@ -1514,6 +1514,7 @@ public class PrismContainerValue<C extends Containerable> extends PrismValue imp
         }
     }
 
+    @Override
     public QName getTypeName() {
         return getComplexTypeDefinition() != null ? getComplexTypeDefinition().getTypeName() : null;
     }
