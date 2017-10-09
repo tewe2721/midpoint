@@ -62,12 +62,15 @@ public class RawType implements Serializable, Cloneable, Equals, Revivable {
         }
     }
 
-	public RawType(PrismValue parsed, @NotNull PrismContext prismContext) {
+	public RawType(PrismValue parsed, QName explicitTypeName, @NotNull PrismContext prismContext) {
 		this.prismContext = prismContext;
 		this.parsed = parsed;
-		if (parsed != null && parsed.getTypeName() != null) {
+		if (explicitTypeName != null) {
+			this.explicitTypeName = explicitTypeName;
+			this.explicitTypeDeclaration = true;        // todo
+		} else if (parsed != null && parsed.getTypeName() != null) {
 			this.explicitTypeName = parsed.getTypeName();
-			this.explicitTypeDeclaration = true;
+			this.explicitTypeDeclaration = true;        // todo
 		}
 	}
 
@@ -118,6 +121,8 @@ public class RawType implements Serializable, Cloneable, Equals, Revivable {
 				}
 				xnode = null;
 				parsed = value;
+				explicitTypeName = itemDefinition.getTypeName();
+				explicitTypeDeclaration = true; // todo
 				return (IV) parsed;
 			} else {
 				// we don't really want to set 'parsed', as we didn't performed real parsing

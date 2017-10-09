@@ -16,6 +16,7 @@
 
 package com.evolveum.midpoint.wf.impl.processes.common;
 
+import com.evolveum.midpoint.prism.Referencable;
 import com.evolveum.midpoint.util.DebugUtil;
 import com.evolveum.midpoint.xml.ns._public.common.common_3.ObjectReferenceType;
 
@@ -42,11 +43,11 @@ public class LightweightObjectRefImpl implements LightweightObjectRef, Serializa
         this.description = description;
     }
 
-    public LightweightObjectRefImpl(ObjectReferenceType objectReferenceType) {
-        this.oid = objectReferenceType.getOid();
-        this.type = objectReferenceType.getType();
-        this.description = objectReferenceType.getDescription();
-        this.targetName = getOrig(objectReferenceType.getTargetName());
+    public LightweightObjectRefImpl(Referencable referencable) {
+        this.oid = referencable.getOid();
+        this.type = referencable.getType();
+        this.description = referencable.getDescription();
+        this.targetName = getOrig(referencable.getTargetName());
     }
 
     public LightweightObjectRefImpl(String value) {
