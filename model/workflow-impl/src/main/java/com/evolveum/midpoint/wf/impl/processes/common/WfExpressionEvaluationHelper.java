@@ -109,9 +109,22 @@ public class WfExpressionEvaluationHelper {
 		context.setAdditionalConvertor(additionalConvertor);
 		PrismValueDeltaSetTriple<?> exprResultTriple = ModelExpressionThreadLocalHolder
 				.evaluateAnyExpressionInContext(expression, context, task, result);
-		return exprResultTriple.getZeroSet().stream()
-				.map(ppv -> (T) ppv.getRealValue())
-				.collect(Collectors.toList());
+		List<T> list = new ArrayList<>();
+		for (PrismValue pv : exprResultTriple.getZeroSet()) {
+			T realValue;
+			if (pv instanceof PrismReferenceValue) {
+				// pv.getRealValue sometimes returns synthesized Referencable, not ObjectReferenceType
+				// If we would stay with that we would need to make many changes throughout workflow module.
+				// So it is safer to stay with ObjectReferenceType.
+				ObjectReferenceType ort = new ObjectReferenceType();
+				ort.setupReferenceValue((PrismReferenceValue) pv);
+				realValue = (T) ort;
+			} else {
+				realValue = pv.getRealValue();
+			}
+			list.add(realValue);
+		}
+		return list;
 	}
 
 	public boolean evaluateBooleanExpression(ExpressionType expressionType, ExpressionVariables expressionVariables,

@@ -18,7 +18,6 @@ package com.evolveum.midpoint.wf.impl.processes.common;
 
 import com.evolveum.midpoint.model.api.expr.MidpointFunctions;
 import com.evolveum.midpoint.prism.PrismContext;
-import com.evolveum.midpoint.prism.Referencable;
 import com.evolveum.midpoint.prism.xml.XmlTypeConverter;
 import com.evolveum.midpoint.schema.result.OperationResult;
 import com.evolveum.midpoint.schema.util.ObjectTypeUtil;
@@ -167,7 +166,7 @@ public class ActivitiUtil implements Serializable {
 		}
 	}
 
-	public static List<LightweightObjectRef> toLightweightReferences(Collection<? extends Referencable> refs) {
+	public static List<LightweightObjectRef> toLightweightReferences(Collection<ObjectReferenceType> refs) {
 		return refs.stream().map(ort -> new LightweightObjectRefImpl(ort)).collect(Collectors.toList());
 	}
 
