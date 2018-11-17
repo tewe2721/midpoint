@@ -24,107 +24,49 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * @author mederly
+ * TODO TODO TODO
  */
-public class ParsingContext implements Cloneable {
+public interface ParsingContext extends Cloneable {
 
-	private XNodeProcessorEvaluationMode evaluationMode = XNodeProcessorEvaluationMode.STRICT;
-	private boolean allowMissingRefTypes;
-	private final List<String> warnings = new ArrayList<>();
+	boolean isAllowMissingRefTypes();
 
-	private ParsingContext() {
-	}
+	XNodeProcessorEvaluationMode getEvaluationMode();
 
-	private void setAllowMissingRefTypes(boolean allowMissingRefTypes) {
-		this.allowMissingRefTypes = allowMissingRefTypes;
-	}
-
-	private void setEvaluationMode(XNodeProcessorEvaluationMode evaluationMode) {
-		this.evaluationMode = evaluationMode;
-	}
-
-	public boolean isAllowMissingRefTypes() {
-		return allowMissingRefTypes;
-	}
-
-	public XNodeProcessorEvaluationMode getEvaluationMode() {
-		return evaluationMode;
-	}
-
-	public static ParsingContext forMode(XNodeProcessorEvaluationMode mode) {
-		ParsingContext pc = new ParsingContext();
+	static ParsingContext forMode(XNodeProcessorEvaluationMode mode) {
+		ParsingContextImpl pc = new ParsingContextImpl();
 		pc.setEvaluationMode(mode);
 		return pc;
 	}
 
-	public static ParsingContext allowMissingRefTypes() {
-		ParsingContext pc = new ParsingContext();
+	static ParsingContext allowMissingRefTypes() {
+		ParsingContextImpl pc = new ParsingContextImpl();
 		pc.setAllowMissingRefTypes(true);
 		return pc;
 	}
 
-	public static ParsingContext createDefault() {
-		return new ParsingContext();
+	static ParsingContext createDefault() {
+		return new ParsingContextImpl();
 	}
 
-	public boolean isCompat() {
-		return evaluationMode == XNodeProcessorEvaluationMode.COMPAT;
-	}
+	boolean isCompat();
 
-	public boolean isStrict() {
-		return evaluationMode == XNodeProcessorEvaluationMode.STRICT;
-	}
+	boolean isStrict();
 
-	public void warn(Trace logger, String message) {
-		logger.warn("{}", message);
-		warn(message);
-	}
+	void warn(Trace logger, String message);
 
-	public void warnOrThrow(Trace logger, String message) throws SchemaException {
-		warnOrThrow(logger, message, null);
-	}
+	void warnOrThrow(Trace logger, String message) throws SchemaException;
 
-	public void warnOrThrow(Trace logger, String message, Throwable t) throws SchemaException {
-		if (isCompat()) {
-			logger.warn("{}", message, t);
-			warn(message);
-		} else {
-			throw new SchemaException(message, t);
-		}
-	}
+	void warnOrThrow(Trace logger, String message, Throwable t) throws SchemaException;
 
-	public void warn(String message) {
-		warnings.add(message);
-	}
+	void warn(String message);
 
-	public List<String> getWarnings() {
-		return warnings;
-	}
+	List<String> getWarnings();
 
-	public boolean hasWarnings() {
-		return !warnings.isEmpty();
-	}
+	boolean hasWarnings();
 
-	public ParsingContext clone() {
-		ParsingContext clone;
-		try {
-			clone = (ParsingContext) super.clone();
-		} catch (CloneNotSupportedException e) {
-			throw new IllegalStateException(e);
-		}
-		clone.evaluationMode = evaluationMode;
-		clone.allowMissingRefTypes = allowMissingRefTypes;
-		clone.warnings.addAll(warnings);
-		return clone;
-	}
+	ParsingContext clone();
 
-	public ParsingContext strict() {
-		this.setEvaluationMode(XNodeProcessorEvaluationMode.STRICT);
-		return this;
-	}
+	ParsingContext strict();
 
-	public ParsingContext compat() {
-		this.setEvaluationMode(XNodeProcessorEvaluationMode.COMPAT);
-		return this;
-	}
+	ParsingContext compat();
 }
