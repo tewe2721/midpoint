@@ -13,792 +13,700 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package com.evolveum.midpoint.prism.path;
 
+import com.evolveum.midpoint.prism.PrismContext;
+import com.evolveum.midpoint.prism.marshaller.ItemPathHolder;
 import com.evolveum.midpoint.util.QNameUtil;
 import com.evolveum.midpoint.util.ShortDumpable;
-import com.evolveum.prism.xml.ns._public.types_3.ItemPathType;
-import org.apache.commons.lang.Validate;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.w3c.dom.Element;
 
 import javax.xml.namespace.QName;
 import java.io.Serializable;
-import java.util.*;
+import java.util.Iterator;
+import java.util.List;
 
 /**
- * @author semancik
+ * General interface to ItemPath objects.
+ * A path is viewed as a sequence of path segments.
  *
+ * There are three basic implementations of this interface:
+ *
+ * 1) ItemPathImpl
+ * ===============
+ *
+ * This is memory-optimized implementation, minimizing the number of objects created during initialization.
+ * Its segments contain plain objects (e.g. QNames, Longs), mixed with ItemPathSegments where necessary.
+ * Please see ItemPathImpl for details.
+ *
+ * 2) ItemName
+ * ===========
+ *
+ * A subclass of QName representing a single-item path. It eliminates the need to create artificial ItemPath objects
+ * to represent a single name.
+ *
+ * The problem with ItemPathImpl and ItemName is that equals/hashCode methods do not work on them as one would expect.
+ * There are too many ways how to represent a given path, so one cannot rely on these methods. (QName.equals and hashCode
+ * are final, so they cannot be adapted.)
+ *
+ * So, if ItemPath is to be used e.g. as a key in HashMap, the original implementation has to be used.
+ *
+ * 3) UniformItemPathImpl
+ * ======================
+ *
+ * This is the original implementation. It sees the path as a sequence of ItemPathSegment objects.
+ * Its advantage is the reasonable equals/hashCode methods. The disadvantage is the memory intensiveness
+ * (creating a high number of tiny objects during path manipulations).
+ *
+ * Objects of ItemPath type are designed to be immutable. Modification operations in this API always create new objects.
+ *
+ * Naming convention:
+ * - A path consists of SEGMENTS.
+ * - However, when creating the path, we provide a sequence of COMPONENTS. We transform components into segments by applying
+ *   a normalization procedure.
  */
-public class ItemPath implements Serializable, Cloneable, ShortDumpable {
+public interface ItemPath extends ShortDumpable, Serializable {
 
-	@Deprecated	// use ItemPathType.COMPLEX_TYPE
-	public static final QName XSD_TYPE = ItemPathType.COMPLEX_TYPE;
+	ItemPath EMPTY_PATH = ItemPathImpl.EMPTY_PATH;
 
-	public static final ItemPath EMPTY_PATH = ItemPath.createEmpty();
-
-	private static ItemPath createEmpty() {
-		ItemPath empty = new ItemPath();
-		empty.segments = Collections.emptyList();			// to ensure it won't get modified in no case
-		return empty;
-	}
-
-	private List<ItemPathSegment> segments;
-	private Map<String, String> namespaceMap;
-
-	public void setNamespaceMap(Map<String, String> namespaceMap) {
-		this.namespaceMap = namespaceMap;
-	}
-
-	public Map<String, String> getNamespaceMap() {
-		return namespaceMap;
-	}
-
-	// use ItemPath.EMPTY_PATH from outside clients to avoid unnecessary instantiation
-	private ItemPath() {
-		segments = new ArrayList<>();		// to provide room for growth
-	}
-
-	public ItemPath(QName... qnames) {
-		this.segments = new ArrayList<>(qnames.length);
-		for (QName qname : qnames) {
-			add(qname);
-		}
-	}
-
-    public ItemPath(String... names) {
-        this.segments = new ArrayList<>(names.length);
-        for (String name : names) {
-            add(stringToQName(name));
-        }
-    }
-
-	public ItemPath(Object... namesOrIdsOrSegments) {
-		this.segments = new ArrayList<>(namesOrIdsOrSegments.length);
-		for (Object nameOrIdOrSegment : namesOrIdsOrSegments) {
-			if (nameOrIdOrSegment instanceof ItemPathSegment) {
-				add((ItemPathSegment) nameOrIdOrSegment);
-			} else if (nameOrIdOrSegment instanceof QName) {
-				add((QName) nameOrIdOrSegment);
-			} else if (nameOrIdOrSegment instanceof String) {
-				add(stringToQName((String) nameOrIdOrSegment));
-			} else if (nameOrIdOrSegment instanceof Long) {
-				this.segments.add(new IdItemPathSegment((Long) nameOrIdOrSegment));
-			} else if (nameOrIdOrSegment instanceof Integer) {
-				this.segments.add(new IdItemPathSegment(((Integer) nameOrIdOrSegment).longValue()));
-			} else {
-				throw new IllegalArgumentException("Invalid item path segment value: " + nameOrIdOrSegment);
-			}
-		}
-	}
-
-	private QName stringToQName(String name) {
-		Validate.notNull(name, "name");
-		if (ParentPathSegment.SYMBOL.equals(name)) {
-			return ParentPathSegment.QNAME;
-		} else if (ObjectReferencePathSegment.SYMBOL.equals(name)) {
-			return ObjectReferencePathSegment.QNAME;
-		} else if (IdentifierPathSegment.SYMBOL.equals(name)) {
-			return IdentifierPathSegment.QNAME;
-		} else {
-			return new QName(name);
-		}
-	}
-
-	public ItemPath(ItemPath parentPath, QName subName) {
-		this.segments = new ArrayList<>(parentPath.segments.size()+1);
-		segments.addAll(parentPath.segments);
-		add(subName);
-	}
-
-	public ItemPath(ItemPath parentPath, ItemPath childPath) {
-		this.segments = new ArrayList<>(parentPath.segments.size()+childPath.segments.size());
-		segments.addAll(parentPath.segments);
-		segments.addAll(childPath.segments);
-	}
-
-
-	public ItemPath(List<ItemPathSegment> segments) {
-		this.segments = new ArrayList<>(segments.size());
-		this.segments.addAll(segments);
-	}
-
-	public ItemPath(List<ItemPathSegment> segments, ItemPathSegment subSegment) {
-		this.segments = new ArrayList<>(segments.size()+1);
-		this.segments.addAll(segments);
-		this.segments.add(subSegment);
-	}
-
-	public ItemPath(List<ItemPathSegment> segments, QName subName) {
-		this.segments = new ArrayList<>(segments.size()+1);
-		this.segments.addAll(segments);
-		add(subName);
-	}
-
-	public ItemPath(List<ItemPathSegment> segments, List<ItemPathSegment> additionalSegments) {
-		this.segments = new ArrayList<>(segments.size()+additionalSegments.size());
-		this.segments.addAll(segments);
-		this.segments.addAll(additionalSegments);
-	}
-
-	public ItemPath(ItemPathSegment... segments) {
-		this.segments = new ArrayList<>(segments.length);
-		Collections.addAll(this.segments, segments);
-	}
-
-	private ItemPath(Iterator<ItemPathSegment> iterator) {
-		this.segments = new ArrayList<>();		// default size
-		iterator.forEachRemaining(segments::add);
-	}
-
-	public ItemPath(ItemPath parentPath, ItemPathSegment subSegment) {
-		this.segments = new ArrayList<>(parentPath.segments.size() + 1);
-		this.segments.addAll(parentPath.segments);
-		this.segments.add(subSegment);
-	}
-
-	public ItemPath subPath(QName subName) {
-		return new ItemPath(segments, subName);
-	}
-
-	public ItemPath subPath(Object... components) {
-		return new ItemPath(segments, new ItemPath(components).segments);
-	}
-
-	public ItemPath subPath(Long id) {
-		return subPath(new IdItemPathSegment(id));
-	}
-
-	public ItemPath subPath(ItemPathSegment subSegment) {
-		return new ItemPath(segments, subSegment);
-	}
-
-	public ItemPath subPath(ItemPath subPath) {
-		ItemPath newPath = new ItemPath(segments);
-		newPath.segments.addAll(subPath.getSegments());
-		return newPath;
-	}
-
+	//region Creation and basic operations
 	/**
-	 * Null-proof static version.
-	 */
-	public static ItemPath subPath(ItemPath prefix, ItemPathSegment subSegment) {
-		if (prefix == null && subSegment == null) {
-			return EMPTY_PATH;
-		}
-		if (prefix == null) {
-			return new ItemPath(subSegment);
-		}
-		return prefix.subPath(subSegment);
-	}
-
-	private void add(QName qname) {
-		this.segments.add(createSegment(qname, false));
-	}
-
-	private void add(ItemPathSegment segment) {
-		this.segments.add(segment);
-	}
-
-	public static ItemPathSegment createSegment(QName qname, boolean variable) {
-		if (ParentPathSegment.QNAME.equals(qname)) {
-			return new ParentPathSegment();
-		} else if (ObjectReferencePathSegment.QNAME.equals(qname)) {
-			return new ObjectReferencePathSegment();
-		} else if (IdentifierPathSegment.QNAME.equals(qname)) {
-			return new IdentifierPathSegment();
-		} else {
-			return new NameItemPathSegment(qname, variable);
-		}
-	}
-
-	public List<ItemPathSegment> getSegments() {
-		return segments;
-	}
-
-	public ItemPathSegment first() {
-		if (segments.size() == 0) {
-			return null;
-		}
-		return segments.get(0);
-	}
-
-	@NotNull
-	public ItemPath rest() {
-		return tail();
-	}
-
-    public NameItemPathSegment lastNamed() {
-        for (int i = segments.size()-1; i >= 0; i--) {
-            if (segments.get(i) instanceof NameItemPathSegment) {
-                return (NameItemPathSegment) segments.get(i);
-            }
-        }
-        return null;
-    }
-
-    @Nullable
-	public ItemPathSegment last() {
-		if (segments.size() == 0) {
-			return null;
-		}
-		return segments.get(segments.size()-1);
-	}
-
-	/**
-	 * Returns first segment in a form of path.
-	 */
-	public ItemPath head() {
-		return new ItemPath(first());
-	}
-
-	/**
-	 * Returns path containing all segments except the first N.
-	 */
-	@NotNull
-	public ItemPath tail(int n) {
-		if (n == 0) {
-			return this;
-		} else if (segments.size() < n) {
-			return EMPTY_PATH;
-		} else {
-			return new ItemPath(segments.subList(n, segments.size()));
-		}
-	}
-
-	@NotNull
-	public ItemPath tail() {
-		return tail(1);
-	}
-
-	/**
-	 * Returns a path containing all segments except the last one.
-	 */
-	@NotNull
-	public ItemPath allExceptLast() {
-		if (segments.size() == 0) {
-			return EMPTY_PATH;
-		}
-		return new ItemPath(segments.subList(0, segments.size()-1));
-	}
-
-    /**
-     * Returns a path containing all segments up to (and not including) the last one.
-     */
-    public ItemPath allUpToLastNamed() {
-        for (int i = segments.size()-1; i >= 0; i--) {
-            if (segments.get(i) instanceof NameItemPathSegment) {
-                return new ItemPath(segments.subList(0, i));
-            }
-        }
-        return EMPTY_PATH;
-    }
-
-    /**
-     * Returns a path containing all segments up to (not including) the specified one;
-     * counted from backwards.
-     * If the segment is not present, returns empty path.
-     */
-	@SuppressWarnings("unused")
-	public ItemPath allUpTo(ItemPathSegment segment) {
-        int i = segments.lastIndexOf(segment);
-        if (i < 0) {
-            return EMPTY_PATH;
-        } else {
-            return new ItemPath(segments.subList(0, i));
-        }
-    }
-
-    /**
-     * Returns a path containing all segments up to (including) the specified one;
-     * counted from backwards.
-     * If the segment is not present, returns empty path.
-     */
-    public ItemPath allUpToIncluding(ItemPathSegment segment) {
-        int i = segments.lastIndexOf(segment);
-        if (i < 0) {
-            return EMPTY_PATH;
-        } else {
-            return allUpToIncluding(i);
-        }
-    }
-
-    public ItemPath allUpToIncluding(int i) {
-        return new ItemPath(segments.subList(0, i+1));
-    }
-
-    public int size() {
-		return segments.size();
-	}
-
-	public boolean isEmpty() {
-		return segments.isEmpty();
-	}
-
-	/**
-	 * Makes the path "normal" by inserting null Id segments where they were omitted.
-	 */
-	public ItemPath normalize() {
-		ItemPath normalizedPath = new ItemPath();
-		ItemPathSegment lastSegment = null;
-		Iterator<ItemPathSegment> iterator = segments.iterator();
-		while (iterator.hasNext()) {
-			ItemPathSegment origSegment = iterator.next();
-			if (lastSegment != null && !(lastSegment instanceof IdItemPathSegment) &&
-					!(origSegment instanceof IdItemPathSegment)) {
-				normalizedPath.segments.add(new IdItemPathSegment());
-			}
-			normalizedPath.segments.add(origSegment);
-			lastSegment = origSegment;
-		}
-		if (lastSegment != null && !(lastSegment instanceof IdItemPathSegment) &&
-				// Make sure we do not insert the Id segment as a last one. That is not correct and it would spoil comparing paths
-				iterator.hasNext()) {
-			normalizedPath.segments.add(new IdItemPathSegment());
-		}
-		return normalizedPath;
-	}
-
-	public ItemPath removeIdentifiers() {
-		ItemPath rv = new ItemPath();
-		for (ItemPathSegment segment : segments) {
-			if (!(segment instanceof IdItemPathSegment)) {
-				rv.add(segment);
-			}
-		}
-		return rv;
-	}
-
-	/**
-	 * path1.compareComplex(path2) returns:
+	 * Creates the path from given components. The components can contain objects of various kinds:
+	 * - QName -> interpreted as either named segment or a special segment (if the name exactly matches special segment name)
+	 * - Integer/Long -> interpreted as Id path segment
+	 * - null -> interpreted as null Id path segment
+	 * - ItemPathSegment -> interpreted as such
+	 * - ItemPath, Object[], Collection -> interpreted recursively as a sequence of components
 	 *
-	 *  - EQUIVALENT if the paths are equivalent
-	 *  - SUBPATH if path1 is a subpath of path2, i.e. it is its 'prefix' (it is shorter): like A/B is a subpath of A/B/C/D
-	 *  - SUPERPATH if path2 is a subpath of path1, like A/B/C/D is a superpath of A/B
-	 *  - NO_RELATION if neither of the above three occurs
+	 * Creates the default implementation of ItemPathImpl. Components are normalized on creation as necessary; although
+	 * the number of object creation is minimized.
 	 */
-	@Deprecated
-	public CompareResult compareComplexOld(ItemPath otherPath) {
-		ItemPath thisNormalized = this.normalize();
-		ItemPath otherNormalized = otherPath == null ? EMPTY_PATH : otherPath.normalize();
-		int i = 0;
-		while (i < thisNormalized.segments.size() && i < otherNormalized.segments.size()) {
-			ItemPathSegment thisSegment = thisNormalized.segments.get(i);
-			ItemPathSegment otherSegment = otherNormalized.segments.get(i);
-			if (!thisSegment.equivalent(otherSegment)) {
-				return CompareResult.NO_RELATION;
-			}
-			i++;
-		}
-		if (i < thisNormalized.size()) {
-			return CompareResult.SUPERPATH;				// "this" is longer than "other"
-		}
-		if (i < otherNormalized.size()) {
-			return CompareResult.SUBPATH;				// "this" is shorter than "other"
-		}
-		return CompareResult.EQUIVALENT;
-	}
-
-	/**
-	 * Alternative to normalization: reads the same sequence of segments of 'path' as segments of 'path.normalize()'
-	 */
-	private static class ItemPathNormalizingIterator implements Iterator<ItemPathSegment> {
-		final ItemPath path;
-		private int i = 0;
-		private boolean nextIsArtificialId = false;
-
-		ItemPathNormalizingIterator(ItemPath path) {
-			this.path = path;
-		}
-
-		@Override
-		public boolean hasNext() {
-			// note that if i == path.size(), nextIsArtificialId is always false
-			return i < path.size();
-		}
-
-		@Override
-		public ItemPathSegment next() {
-			if (i >= path.size()) {
-				throw new IndexOutOfBoundsException("Index: " + i + ", path size: " + path.size() + ", path: " + path);
-			} else if (nextIsArtificialId) {
-				nextIsArtificialId = false;
-				return new IdItemPathSegment();
-			} else if (i == path.size() - 1) {
-				// the last segment: nothing will be added
-				return path.segments.get(i++);
-			} else {
-				ItemPathSegment rv = path.segments.get(i++);
-				if (!(rv instanceof IdItemPathSegment) && !(path.segments.get(i) instanceof IdItemPathSegment)) {
-					nextIsArtificialId = true;			// next one returned will be artificial id segment
-				}
-				return rv;
-			}
-		}
-	}
-
-	private ItemPathNormalizingIterator normalizingIterator() {
-		return new ItemPathNormalizingIterator(this);
-	}
-
-	public CompareResult compareComplex(ItemPath otherPath) {
-		ItemPathNormalizingIterator thisIterator = this.normalizingIterator();
-		ItemPathNormalizingIterator otherIterator = (otherPath != null ? otherPath : EMPTY_PATH).normalizingIterator();
-		while (thisIterator.hasNext() && otherIterator.hasNext()) {
-			ItemPathSegment thisSegment = thisIterator.next();
-			ItemPathSegment otherSegment = otherIterator.next();
-			if (!thisSegment.equivalent(otherSegment)) {
-				return CompareResult.NO_RELATION;
-			}
-		}
-		if (thisIterator.hasNext()) {
-			return CompareResult.SUPERPATH;				// "this" is longer than "other"
-		}
-		if (otherIterator.hasNext()) {
-			return CompareResult.SUBPATH;				// "this" is shorter than "other"
-		}
-		return CompareResult.EQUIVALENT;
-	}
-
-//	public CompareResult compareComplex(ItemPath otherPath) {
-//		CompareResult r1 = compareComplexOld(otherPath);
-//		CompareResult r2 = compareComplexEfficient(otherPath);
-//		if (r1 != r2) {
-//			throw new AssertionError("old vs efficient: r1 = " + r1 + ", r2 = " + r2);
-//		}
-//		return r2;
-//	}
-
-    public static boolean containsEquivalent(Collection<ItemPath> paths, ItemPath pathToBeFound) {
-        for (ItemPath path : paths) {
-            if (path.equivalent(pathToBeFound)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-	/**
-	 * Returns true if the collection contains a superpath of or equivalent path to the given path.
-	 * I.e. having collection = { A/B, A/C }
-	 * then the method for this collection and 'path' returns:
-	 *  - path = A/B -&gt; true
-	 *  - path = A -&gt; true
-	 *  - path = A/B/C -&gt; false
-	 *  - path = X -&gt; false
-	 */
-    public static boolean containsSuperpathOrEquivalent(Collection<ItemPath> paths, ItemPath pathToBeFound) {
-    	for (ItemPath path : paths) {
-    		if (path.isSuperPathOrEquivalent(pathToBeFound)) {
-    			return true;
-    		}
-    	}
-    	return false;
-    }
-
-	/**
-	 * Returns true if the collection contains a superpath of the given path.
-	 * I.e. having collection = { A/B, A/C }
-	 * then the method for this collection and 'path' returns:
-	 *  - path = A/B -&gt; false
-	 *  - path = A -&gt; true
-	 *  - path = A/B/C -&gt; false
-	 *  - path = X -&gt; false
-	 */
-	public static boolean containsSuperpath(Collection<ItemPath> paths, ItemPath pathToBeFound) {
-		for (ItemPath path : paths) {
-    		if (path.isSuperPath(pathToBeFound)) {
-    			return true;
-    		}
-    	}
-    	return false;
-	}
-
-	/**
-	 * Returns true if the collection contains a subpath of or equivalent path to the given path.
-	 * I.e. having collection = { A/B, A/C }
-	 * then the method for this collection and 'path' returns:
-	 *  - path = A/B -&gt; true
-	 *  - path = A -&gt; false
-	 *  - path = A/B/C -&gt; true
-	 *  - path = X -&gt; false
-	 */
-    public static boolean containsSubpathOrEquivalent(Collection<ItemPath> paths, ItemPath pathToBeFound) {
-    	for (ItemPath path : paths) {
-    		if (path.isSubPathOrEquivalent(pathToBeFound)) {
-    			return true;
-    		}
-    	}
-    	return false;
-    }
-
-	/**
-	 * Returns true if the collection contains a superpath of the given path.
-	 * I.e. having collection = { A/B, A/C }
-	 * then the method for this collection and 'path' returns:
-	 *  - path = A/B -&gt; false
-	 *  - path = A -&gt; false
-	 *  - path = A/B/C -&gt; true
-	 *  - path = X -&gt; false
-	 */
-	public static boolean containsSubpath(Collection<ItemPath> paths, ItemPath pathToBeFound) {
-		for (ItemPath path : paths) {
-    		if (path.isSubPath(pathToBeFound)) {
-    			return true;
-    		}
-    	}
-    	return false;
-	}
-
-    public ItemPath namedSegmentsOnly() {
-        ItemPath rv = new ItemPath();
-        for (ItemPathSegment segment : segments) {
-            if (segment instanceof NameItemPathSegment) {
-                rv.add(((NameItemPathSegment) segment).getName());
-            }
-        }
-        return rv;
-    }
-
-	public static boolean isNullOrEmpty(ItemPath itemPath) {
-		return itemPath == null || itemPath.isEmpty();
-	}
-
-	public static boolean isNullOrEmpty(ItemPathType pathType) {
-		return pathType == null || isNullOrEmpty(pathType.getItemPath());
-	}
-
-	@SuppressWarnings("unused")
-	public static boolean containsSingleNameSegment(ItemPath path) {
-		return path != null && path.size() == 1 && path.first() instanceof NameItemPathSegment;
-	}
-
-	public boolean startsWith(Class<? extends ItemPathSegment> clazz) {
-		return !isEmpty() && clazz.isAssignableFrom(first().getClass());
-	}
-
-	public boolean startsWith(ItemPath other) {
-		return other == null || other.isSubPathOrEquivalent(this);
-	}
-
-	public boolean startsWithName(QName name) {
-		return !isEmpty()
-				&& startsWith(NameItemPathSegment.class)
-				&& QNameUtil.match(name, ((NameItemPathSegment) first()).getName());
-	}
-
-	public boolean startsWithVariable() {
-		return !isEmpty() && first().isVariable();
-	}
-
-	public ItemPath stripVariableSegment() {
-		return startsWithVariable() ? rest() : this;
-	}
-
-	public QName asSingleName() {
-		if (isSingleName()) {
-			return ((NameItemPathSegment) first()).getName();
-		} else {
-			return null;
-		}
-	}
-
-	public boolean isSingleName() {
-		return size() == 1 && startsWith(NameItemPathSegment.class);
-	}
-
-	public static QName asSingleName(ItemPath path) {
-		return path != null ? path.asSingleName() : null;
-	}
-
-	public static ItemPath[] asPathArray(QName... names) {
-		ItemPath[] paths = new ItemPath[names.length];
-		int i = 0;
-		for (QName name : names) {
-			paths[i++] = new ItemPath(name);
-		}
-		return paths;
-	}
-
-	public ItemPath append(QName childName) {
-		return new ItemPath(this, childName);
-	}
-
-	public ItemPath append(ItemPath childPath) {
-		return new ItemPath(this, childPath);
-	}
-
 	@NotNull
-	public static List<ItemPath> fromStringList(List<String> pathsAsStrings) {
-		List<ItemPath> rv = new ArrayList<>();
-		if (pathsAsStrings != null) {
-			for (String pathAsString : pathsAsStrings) {
-				rv.add(new ItemPathType(pathAsString).getItemPath());
-			}
-		}
-		return rv;
+	static ItemPath create(Object... components) {
+		return ItemPathImpl.createFromArray(components);
 	}
 
-	public enum CompareResult {
+	/**
+	 * Creates the path from given components.
+	 * @see ItemPath#create(Object...)
+	 */
+	@NotNull
+	static ItemPath create(@NotNull List<?> components) {
+		return ItemPathImpl.createFromList(components);
+	}
+
+	/**
+	 * Returns true if the path is empty i.e. has no components.
+	 */
+	boolean isEmpty();
+
+	/**
+	 * Returns true if the path is null or empty.
+	 */
+	static boolean isEmpty(ItemPath path) {
+		return path == null || path.isEmpty();
+	}
+
+	/**
+	 * Returns path size i.e. the number of components.
+	 */
+	int size();
+
+	/**
+	 * Returns a newly created path containing all the segments of this path with added components.
+	 */
+	@NotNull
+	default ItemPath append(Object... components) {
+		return ItemPath.create(this, components);       // todo optimize this
+	}
+
+	/**
+	 * Returns the path segments.
+	 *
+	 * Avoid using this method and access segments directly. Instead try to find suitable method in ItemPath interface.
+	 * NEVER change path content using this method.
+	 *
+	 * TODO consider returning unmodifiable collection here (beware of performance implications)
+	 */
+	@NotNull
+	List<?> getSegments();
+
+	/**
+	 * Returns the given path segment.
+	 * @throws IndexOutOfBoundsException if the index is out of range
+	 */
+	@Nullable
+	Object getSegment(int i);
+
+	//endregion
+
+	//region Path comparison
+	enum CompareResult {
 		EQUIVALENT, SUPERPATH, SUBPATH, NO_RELATION
 	}
 
-	public boolean isSubPath(ItemPath otherPath) {
-		return compareComplex(otherPath) == CompareResult.SUBPATH;
-	}
-
-	public boolean isSuperPath(ItemPath otherPath) {
-		return compareComplex(otherPath) == CompareResult.SUPERPATH;
-	}
-
-	public boolean isSuperPathOrEquivalent(ItemPath otherPath) {
-		CompareResult result = compareComplex(otherPath);
-		return result == CompareResult.SUPERPATH || result == CompareResult.EQUIVALENT;
-	}
-
-    public boolean isSubPathOrEquivalent(ItemPath otherPath) {
-        CompareResult result = compareComplex(otherPath);
-        return result == CompareResult.SUBPATH || result == CompareResult.EQUIVALENT;
-    }
-
-    /**
-     * Compares two paths semantically.
-     */
-    public boolean equivalent(ItemPath otherPath) {
-		return compareComplex(otherPath) == CompareResult.EQUIVALENT;
-	}
-
-	@Deprecated // use remainder instead
-	public ItemPath substract(ItemPath otherPath) {
-        return remainder(otherPath);                        // the code seems to be equivalent to the one of remainder()
-	}
-
-    /**
-     * Returns the remainder of "this" path after passing all segments from the other path.
-     * (I.e. this path must begin with the content of the other path. Throws an exception when
-     * it is not the case.)
-     */
-	public ItemPath remainder(ItemPath prefix) {
-		ItemPathNormalizingIterator thisIterator = this.normalizingIterator();
-		ItemPathNormalizingIterator prefixIterator = prefix.normalizingIterator();
-		while (prefixIterator.hasNext()) {
-			if (!thisIterator.hasNext()) {
-				throw new IllegalArgumentException("Cannot subtract '"+prefix+"' from path '"+this+
-						"' because it is not a prefix (subpath): it is a superpath instead.");
-			}
-			ItemPathSegment thisSegment = thisIterator.next();
-			ItemPathSegment prefixSegment = prefixIterator.next();
-			if (!thisSegment.equivalent(prefixSegment)) {
-				throw new IllegalArgumentException("Cannot subtract segment '"+prefixSegment+"' from path '"+this+
-						"' because it does not contain corresponding segment; it has '"+thisSegment+"' instead.");
-			}
-		}
-		return new ItemPath(thisIterator);
+	/**
+	 * Compares two item paths.
+	 */
+	default CompareResult compareComplex(@Nullable ItemPath otherPath) {
+		return ItemPathComparatorUtil.compareComplex(this, otherPath);
 	}
 
 	/**
-	 * Strips the prefix from a set of paths.
+	 * Checks if the paths are equivalent. Resolves some differences in path segment representation,
+	 * e.g. NameItemPathSegment vs QName, null vs missing Id path segments.
 	 *
-	 * @param alsoEquivalent If true, 'prefix' in paths is processed as well (resulting in empty path). Otherwise, it is skipped.
+	 * Does NOT detect higher-level semantic equivalency like activation[1]/administrativeStatus vs activation/administrativeStatus.
+	 * These are treated as not equivalent.
 	 */
-	public static Collection<ItemPath> remainder(Collection<ItemPath> paths, ItemPath prefix, boolean alsoEquivalent) {
-		Set<ItemPath> rv = new HashSet<>();
-		for (ItemPath path : paths) {
-			if (alsoEquivalent && path.isSuperPathOrEquivalent(prefix)
-					|| !alsoEquivalent && path.isSuperPath(prefix)) {
-				rv.add(path.remainder(prefix));
-			}
-		}
-		return rv;
+	default boolean equivalent(ItemPath path) {
+		return ItemPathComparatorUtil.equivalent(this, path);
+	}
+
+	static boolean equivalent(ItemPath path1, ItemPath path2) {
+		return ItemPathComparatorUtil.equivalent(path1, path2);
 	}
 
 	/**
-	 * Convenience static method with checks
-	 * @throws IllegalArgumentException If the argument is an item path segment other than a named one
+	 * Compares with the other object either literally (exact = true) or via .equivalent (exact = false).
 	 */
-	public static QName getName(ItemPathSegment segment) {
-		if (segment == null) {
-			return null;
-		}
-		if (!(segment instanceof NameItemPathSegment)) {
-			throw new IllegalArgumentException("Unable to get name from non-name path segment "+segment);
-		}
-		return ((NameItemPathSegment)segment).getName();
-	}
-
-	public static IdItemPathSegment getFirstIdSegment(ItemPath itemPath) {
-		return itemPath != null ? itemPath.getFirstIdSegment() : null;
-	}
-
-	public static NameItemPathSegment getFirstNameSegment(ItemPath itemPath) {
-		return itemPath != null ? itemPath.getFirstNameSegment() : null;
-	}
-
-	public NameItemPathSegment getFirstNameSegment() {
-		ItemPathSegment first = first();
-		if (first instanceof NameItemPathSegment) {
-			return (NameItemPathSegment)first;
-		}
-		if (first instanceof IdItemPathSegment) {
-			return getFirstNameSegment(rest());
-		}
-		return null;
-	}
-
-	public IdItemPathSegment getFirstIdSegment() {
-		ItemPathSegment first = first();
-		if (first instanceof IdItemPathSegment) {
-			return (IdItemPathSegment)first;
+	default boolean equals(Object other, boolean exact) {
+		if (exact) {
+			return equals(other);
 		} else {
-			return null;
+			return other instanceof ItemPath && equivalent((ItemPath) other);
 		}
 	}
 
-	public static QName getFirstName(ItemPath itemPath) {
-		if (itemPath == null) {
-			return null;
-		}
-		return itemPath.getFirstName();
+	/**
+	 * Checks if current path is a strict subpath (prefix) of the other path.
+	 */
+	default boolean isSubPath(ItemPath otherPath) {
+		return ItemPathComparatorUtil.isSubPath(this, otherPath);
 	}
 
-	public QName getFirstName() {
-		NameItemPathSegment nameSegment = getFirstNameSegment();
-		if (nameSegment == null) {
-			return null;
-		}
-		return nameSegment.getName();
+	/**
+	 * Check if current path is a subpath (prefix) of the other path or they are equivalent.
+	 */
+	default boolean isSubPathOrEquivalent(ItemPath otherPath) {
+		return ItemPathComparatorUtil.isSubPathOrEquivalent(this, otherPath);
 	}
 
-	public static ItemPath pathRestStartingWithName(ItemPath path) {
-    	ItemPathSegment pathSegment = path.first();
-    	if (pathSegment instanceof NameItemPathSegment) {
-    		return path;
-    	} else if (pathSegment instanceof IdItemPathSegment) {
-    		return path.rest();
-    	} else {
-    		throw new IllegalArgumentException("Unexpected path segment "+pathSegment);
-    	}
-    }
+	/**
+	 * Check if the other path is a strict subpath (prefix) of this path.
+	 * The same as otherPath.isSubPath(this).
+	 */
+	default boolean isSuperPath(ItemPath otherPath) {
+		return ItemPathComparatorUtil.isSuperPath(this, otherPath);
+	}
 
-	public boolean containsName(QName name) {
-		for (ItemPathSegment segment: segments) {
-			if (segment instanceof NameItemPathSegment && ((NameItemPathSegment)segment).getName().equals(name)) {
+	/**
+	 * Check if the other path is a subpath (prefix) of this path or they are equivalent.
+	 * The same as otherPath.isSubPathOrEquivalent(this).
+	 */
+	default boolean isSuperPathOrEquivalent(ItemPath path) {
+		return ItemPathComparatorUtil.isSuperPathOrEquivalent(this, path);
+	}
+
+	/**
+	 * Convenience method with understandable semantics.
+	 */
+	default boolean startsWith(ItemPath prefix) {
+		return isSuperPathOrEquivalent(prefix);
+	}
+	//endregion
+
+	//region Determining segment types and extracting information from them (isXXX, toXXX)
+	/*
+	 *  Note that segments to be provided here are to be already normalized!
+	 *  I.e. they are to be returned from first(), getSegments() or similar ItemPath methods.
+	 */
+
+	/**
+	 * Returns true if the segment is a name segment.
+	 *
+	 * Note that special segments (parent, reference, identifier, variable) are NOT considered to be name segments,
+	 * even if they can be represented using QName.
+	 */
+	static boolean isName(Object segment) {
+		return ItemPathSegmentUtil.isName(segment);
+	}
+
+	/**
+	 * Returns a name corresponding to the name segment, or throw an exception otherwise.
+	 */
+	@NotNull
+	static ItemName toName(Object segment) {
+		return ItemPathSegmentUtil.toName(segment, true);
+	}
+
+	/**
+	 * Returns a name corresponding to the name segment, or throw an exception otherwise.
+	 * However, accepts null segments.
+	 *
+	 * TODO determine whether to keep this method
+	 */
+	@SuppressWarnings("unused")
+	@Nullable
+	static QName toNameNullSafe(@Nullable Object segment) {
+		return segment != null ? toName(segment) : null;
+	}
+
+	/**
+	 * Returns a name corresponding to the name segment, or null if it's no name.
+	 */
+	@Nullable
+	static ItemName toNameOrNull(Object segment) {
+		return ItemPathSegmentUtil.toName(segment, false);
+	}
+
+	/**
+	 * Returns true if the segment is the container Id.
+	 */
+	static boolean isId(Object o) {
+		return ItemPathSegmentUtil.isId(o);
+	}
+
+	/**
+	 * Returns true if the segment is the container Id with value of NULL.
+	 */
+	static boolean isNullId(Object o) {
+		return ItemPathSegmentUtil.isNullId(o);
+	}
+
+	/**
+	 * Returns a Long value corresponding to the container Id segment, or throw an exception otherwise.
+	 */
+	static Long toId(Object segment) {
+		return ItemPathSegmentUtil.toId(segment, true);
+	}
+
+	/**
+	 * Returns a Long value corresponding to the container Id segment, or return null otherwise.
+	 */
+	static Long toIdOrNull(Object segment) {
+		return ItemPathSegmentUtil.toId(segment, false);
+	}
+
+	/**
+	 * Returns true if the segment is a special one: parent, reference, identifier, variable.
+	 */
+	static boolean isSpecial(Object segment) {
+		return ItemPathSegmentUtil.isSpecial(segment);
+	}
+
+	/**
+	 * Returns true if the segment is the Parent one ("..").
+	 */
+	static boolean isParent(Object segment) {
+		return ItemPathSegmentUtil.isParent(segment);
+	}
+
+	/**
+	 * Returns true if the segment is the Object Reference one ("@").
+	 */
+	static boolean isObjectReference(Object segment) {
+		return ItemPathSegmentUtil.isObjectReference(segment);
+	}
+
+	/**
+	 * Returns true if the segment is the Identifier one ("#").
+	 */
+	static boolean isIdentifier(Object segment) {
+		return ItemPathSegmentUtil.isIdentifier(segment);
+	}
+
+	/**
+	 * Returns true if the segment is the Variable one ("$...").
+	 */
+	static boolean isVariable(Object segment) {
+		return ItemPathSegmentUtil.isVariable(segment);
+	}
+
+	/**
+	 * Returns a name corresponding to the Variable segment, or throw an exception otherwise.
+	 */
+	static QName toVariableName(Object segment) {
+		return ItemPathSegmentUtil.toVariableName(segment);
+	}
+	//endregion
+
+
+	//region Splitting the path
+
+	/**
+	 * Returns the first segment or null if the path is empty.
+	 */
+	@Nullable
+	Object first();
+
+	/**
+	 * Returns the rest of the path (the tail).
+	 */
+	@NotNull
+	default ItemPath rest() {
+		return rest(1);
+	}
+
+	/**
+	 * Returns the rest of the path (the tail), starting at position "n".
+	 */
+	@NotNull
+	ItemPath rest(int n);
+
+	/**
+	 * Returns the first segment as an ItemPath.
+	 * TODO consider the necessity of such method
+	 */
+	ItemPath firstAsPath();
+
+	/**
+	 * Returns the remainder of "this" path after passing all segments from the other path.
+	 * (I.e. this path must begin with the content of the other path. Throws an exception when
+	 * it is not the case.)
+	 */
+	default ItemPath remainder(ItemPath path) {
+		return ItemPathComparatorUtil.remainder(this, path);
+	}
+
+	/**
+	 * Returns the last segment (or null if the path is empty).
+	 */
+	@Nullable
+	Object last();
+
+	/**
+	 * Returns all segments except the last one.
+	 */
+	@NotNull
+	ItemPath allExceptLast();
+
+	/**
+	 * Returns all segments up to the specified one (including it).
+	 */
+	default ItemPath allUpToIncluding(int i) {
+		return subPath(0, i+1);
+	}
+
+	/**
+	 * Returns all segments up to the last named one (excluding).
+	 * Returns empty path if there's no named segment.
+	 */
+	@NotNull
+	default ItemPath allUpToLastName() {
+		return subPath(0, lastNameIndex());
+	}
+
+	/**
+	 * Returns a sub-path from (including) to (excluding) given indices.
+	 */
+	ItemPath subPath(int from, int to);
+
+	//endregion
+
+	//region Checks on path components and extracting information from them
+	/**
+	 * Returns true if the path starts with the standard segment name (i.e. NOT variable nor special symbol).
+	 */
+	default boolean startsWithName() {
+		return !isEmpty() && ItemPath.isName(first());
+	}
+
+	/**
+	 * Returns true if the path starts with with value Id.
+	 */
+	default boolean startsWithId() {
+		return !isEmpty() && ItemPath.isId(first());
+	}
+
+	/**
+	 * Returns true if the path starts with the value Id of null.
+	 */
+	default boolean startsWithNullId() {
+		return !isEmpty() && ItemPath.isNullId(first());
+	}
+
+	/**
+	 * Returns true if the path starts with an identifier (#).
+	 */
+	default boolean startsWithIdentifier() {
+		return !isEmpty() && ItemPath.isIdentifier(first());
+	}
+
+	/**
+	 * Returns true if the path starts with variable name ($...).
+	 */
+	default boolean startsWithVariable() {
+		return !isEmpty() && ItemPath.isVariable(first());
+	}
+
+	/**
+	 * Returns true if the path starts with an object reference (@).
+	 */
+	default boolean startsWithObjectReference() {
+		return !isEmpty() && ItemPath.isObjectReference(first());
+	}
+
+	/**
+	 * Returns true if the path starts with a parent segment (..).
+	 */
+	default boolean startsWithParent() {
+		return !isEmpty() && ItemPath.isParent(first());
+	}
+
+	/**
+	 * If the path consists of a single name segment (not variable nor special symbol), returns the corresponding value.
+	 * Otherwise returns null.
+	 */
+	default QName asSingleName() {
+		return isSingleName() ? ItemPath.toName(first()) : null;
+	}
+
+	/**
+	 * If the path consists of a single name segment (not variable nor special symbol), returns the corresponding value.
+	 * Otherwise throws an exception.
+	 */
+	@NotNull
+	default ItemName asSingleNameOrFail() {
+		if (isSingleName()) {
+			return ItemPath.toName(first());
+		} else {
+			throw new IllegalArgumentException("Expected a single-name path, bug got "+this);
+		}
+	}
+
+	/**
+	 * Returns true if the path consists of a single name segment. (Not variable nor special symbol.)
+	 */
+	default boolean isSingleName() {
+		return size() == 1 && ItemPath.isName(first());
+	}
+
+	/**
+	 * Returns the value of the first segment if it is a name segment; otherwise null.
+	 */
+	@NotNull
+	default ItemName firstToName() {
+		return ItemPath.toName(first());
+	}
+
+	/**
+	 * Returns the value of the first segment if it is a name segment; otherwise null.
+	 */
+	@Nullable
+	default ItemName firstToNameOrNull() {
+		return ItemPath.toNameOrNull(first());
+	}
+
+	static ItemName firstToNameOrNull(ItemPath itemPath) {
+		return itemPath != null ? itemPath.firstToNameOrNull() : null;
+	}
+
+	/**
+	 * Returns the value of the first segment if it is a variable name segment; otherwise null.
+	 */
+	default QName firstToVariableNameOrNull() {
+		if (isEmpty()) {
+			return null;
+		} else {
+			Object first = first();
+			return isVariable(first) ? toVariableName(first) : null;
+		}
+	}
+
+	/**
+	 * Returns the value of the first segment if it is a Id segment; otherwise throws an exception.
+	 */
+	default Long firstToId() {
+		return ItemPath.toId(first());
+	}
+
+	/**
+	 * Returns the value of the first segment if it is a Id segment; otherwise null.
+	 */
+	default Long firstToIdOrNull() {
+		return ItemPath.toIdOrNull(first());
+	}
+
+	static Long firstToIdOrNull(ItemPath path) {
+		return path != null ? path.firstToIdOrNull() : null;
+	}
+
+	/**
+	 * Returns the value of the first name segment or null if there's no name segment.
+	 * NOTE: The difference between firstToName and firstName is that the former always looks
+	 * at the first segment and tries to interpret it as a name. The latter, however, tries to
+	 * find the first segment of Name type.
+	 */
+	@Nullable
+	default ItemName firstName() {
+		int i = firstNameIndex();
+		return i >= 0 ? toName(getSegment(i)) : null;
+	}
+
+	/**
+	 * The same as firstName but throws an exception if there's no name.
+	 */
+	@NotNull
+	default ItemName firstNameOrFail() {
+		ItemName name = firstName();
+		if (name != null) {
+			return name;
+		} else {
+			throw new IllegalArgumentException("No name segment in path: " + this);
+		}
+	}
+
+	/**
+	 * Returns the first name segment index; or -1 if there's no such segment.
+	 */
+	default int firstNameIndex() {
+		for (int i = 0; i < size(); i++) {
+			if (ItemPath.isName(getSegment(i))) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	/**
+	 * Returns the last name segment value; or null if there's no name segment.
+	 */
+	ItemName lastName();
+
+	/**
+	 * Returns the last name segment index; or -1 if there's no such segment.
+	 */
+	default int lastNameIndex() {
+		for (int i = size()-1; i >= 0; i--) {
+			if (ItemPath.isName(getSegment(i))) {
+				return i;
+			}
+		}
+		return -1;
+	}
+
+	static void checkNoSpecialSymbols(ItemPath path) {
+		if (path != null && path.containsSpecialSymbols()) {
+			throw new IllegalStateException("Item path shouldn't contain special symbols but it does: " + path);
+		}
+	}
+
+	static void checkNoSpecialSymbolsExceptParent(ItemPath path) {
+		if (path != null && path.containsSpecialSymbolsExceptParent()) {
+			throw new IllegalStateException("Item path shouldn't contain special symbols (except for parent) but it does: " + path);
+		}
+	}
+
+	default boolean containsSpecialSymbols() {
+		for (Object segment : getSegments()) {
+			if (isSpecial(segment)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	@Override
-	public String toString() {
-		StringBuilder sb = new StringBuilder();
-		shortDump(sb);
-		return sb.toString();
+	default boolean containsSpecialSymbolsExceptParent() {
+		for (Object segment : getSegments()) {
+			if (isSpecial(segment) && !isParent(segment)) {
+				return true;
+			}
+		}
+		return false;
 	}
-	
+	//endregion
+
+	//region Path transformation
+	/**
+	 * Returns the path containing only the regular named segments.
+	 */
+	@NotNull
+	ItemPath namedSegmentsOnly();
+
+	/**
+	 * Returns the path with no Id segments.
+	 */
+	@NotNull
+	ItemPath removeIds();
+
+	/**
+	 * Removes the leading variable segment, if present.
+	 */
+	@NotNull
+	default ItemPath stripVariableSegment() {
+		return startsWithVariable() ? rest() : this;
+	}
+
+	/**
+	 * Converts an ItemPath to a UniformItemPath.
+	 */
+	@NotNull
+	UniformItemPath toUniform(PrismContext prismContext);
+
+	@Nullable
+	static UniformItemPath toUniform(ItemPath path, PrismContext prismContext) {
+		return path != null ? path.toUniform(prismContext) : null;
+	}
+	//endregion
+
+	//region Finding in path
+
+	/**
+	 * Returns true if the path contains the specified name (requires exact match).
+	 */
+	default boolean containsNameExactly(QName name) {
+		return getSegments().stream().anyMatch(component -> isName(component) && name.equals(toName(component)));
+	}
+
+	/**
+	 * Returns true if the path starts with the specified name (approximate match).
+	 */
+	default boolean startsWithName(QName name) {
+		return !isEmpty() && QNameUtil.match(name, firstToNameOrNull());
+	}
+	//endregion
+
+	//region Misc
+
+	/**
+	 * Converts null ItemPath to empty one.
+	 */
+	static ItemPath emptyIfNull(ItemPath path) {
+		return path != null ? path : EMPTY_PATH;
+	}
+
+	/**
+	 * Returns true if the given segments are equivalent.
+	 */
+	static boolean segmentsEquivalent(Object segment1, Object segment2) {
+		return ItemPathComparatorUtil.segmentsEquivalent(segment1, segment2);
+	}
+
+	static UniformItemPath parseFromString(String string) {
+		return ItemPathHolder.parseFromString(string);
+	}
+
+	static UniformItemPath parseFromElement(Element element) {
+		return ItemPathHolder.parseFromElement(element);
+	}
+
+	default String serializeWithDeclarations() {
+		return ItemPathHolder.serializeWithDeclarations(this);
+	}
+
+	default String serializeWithForcedDeclarations() {
+		return ItemPathHolder.serializeWithForcedDeclarations(this);
+	}
+	//endregion
+
+	//region Diagnostics
 	@Override
-	public void shortDump(StringBuilder sb) {
-		Iterator<ItemPathSegment> iterator = segments.iterator();
+	default void shortDump(StringBuilder sb) {
+		Iterator<?> iterator = getSegments().iterator();
 		while (iterator.hasNext()) {
 			sb.append(iterator.next());
 			if (iterator.hasNext()) {
@@ -806,93 +714,5 @@ public class ItemPath implements Serializable, Cloneable, ShortDumpable {
 			}
 		}
 	}
-
-	@Override
-	public int hashCode() {
-		final int prime = 31;
-		int result = 1;
-		result = prime * result + ((segments == null) ? 0 : segments.hashCode());
-		return result;
-	}
-
-	public boolean equals(Object obj, boolean exact) {
-		if (exact) {
-			return equals(obj);
-		} else {
-			return obj instanceof ItemPath && equivalent((ItemPath) obj);
-		}
-	}
-
-    /**
-     * More strict version of ItemPath comparison. Does not use any normalization
-     * nor approximate matching QNames via QNameUtil.match.
-     *
-     * For semantic-level comparison, please use equivalent(..) method.
-     */
-	@Override
-	public boolean equals(Object obj) {
-		if (this == obj)
-			return true;
-		if (obj == null)
-			return false;
-		if (getClass() != obj.getClass())
-			return false;
-		ItemPath other = (ItemPath) obj;
-		if (segments == null) {
-			if (other.segments != null)
-				return false;
-		} else if (!segments.equals(other.segments))
-			return false;
-		return true;
-	}
-
-    public ItemPath clone() {
-        ItemPath clone = new ItemPath();
-        for (ItemPathSegment segment : segments) {
-            clone.segments.add(segment.clone());
-        }
-        if (namespaceMap != null) {
-            clone.namespaceMap = new HashMap<>(namespaceMap);
-        }
-        return clone;
-    }
-
-	public static boolean containsSpecialSymbols(ItemPath path) {
-		return path != null && path.containsSpecialSymbols();
-	}
-
-	public boolean containsSpecialSymbols() {
-		for (ItemPathSegment segment : segments) {
-			if (segment instanceof IdentifierPathSegment || segment instanceof ReferencePathSegment) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public boolean containsSpecialSymbolsExceptParent() {
-		for (ItemPathSegment segment : segments) {
-			if (segment instanceof IdentifierPathSegment || segment instanceof ObjectReferencePathSegment) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	public static void checkNoSpecialSymbols(ItemPath path) {
-		if (containsSpecialSymbols(path)) {
-			throw new IllegalStateException("Item path shouldn't contain special symbols but it does: " + path);
-		}
-	}
-
-	public static void checkNoSpecialSymbolsExceptParent(ItemPath path) {
-		if (path != null && path.containsSpecialSymbolsExceptParent()) {
-			throw new IllegalStateException("Item path shouldn't contain special symbols (except for parent) but it does: " + path);
-		}
-	}
-
-	public ItemPathType asItemPathType() {
-		return new ItemPathType(this);
-	}
-
+	//endregion
 }
