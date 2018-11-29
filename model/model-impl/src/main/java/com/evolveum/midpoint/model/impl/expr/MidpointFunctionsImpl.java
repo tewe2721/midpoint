@@ -623,7 +623,7 @@ public class MidpointFunctionsImpl implements MidpointFunctions {
 			SecurityViolationException, ExpressionEvaluationException {
 		Validate.notEmpty(propertyPathString, "Empty property path");
 		OperationResult result = getCurrentResult(MidpointFunctions.class.getName() + ".isUniquePropertyValue");
-		UniformItemPath propertyPath = ItemPath.parseFromString(propertyPathString);
+		UniformItemPath propertyPath = prismContext.itemPathParser().parseFromString(propertyPathString);
 		return isUniquePropertyValue(objectType, propertyPath, propertyValue, getCurrentTask(), result);
 	}
 
@@ -650,7 +650,7 @@ public class MidpointFunctionsImpl implements MidpointFunctions {
 			SecurityViolationException, ExpressionEvaluationException {
 		Validate.notEmpty(propertyPathString, "Empty property path");
 		OperationResult result = getCurrentResult(MidpointFunctions.class.getName() + ".getObjectsInConflictOnPropertyValue");
-		UniformItemPath propertyPath = ItemPath.parseFromString(propertyPathString);
+		UniformItemPath propertyPath = prismContext.itemPathParser().parseFromString(propertyPathString);
 		QName matchingRuleQName = new QName(matchingRuleName);      // no namespace for now
 		return getObjectsInConflictOnPropertyValue(objectType, propertyPath, propertyValue, matchingRuleQName, getAllConflicting,
 				getCurrentTask(), result);

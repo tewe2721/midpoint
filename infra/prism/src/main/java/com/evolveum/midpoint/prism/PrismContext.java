@@ -18,6 +18,8 @@ package com.evolveum.midpoint.prism;
 
 import com.evolveum.midpoint.prism.crypto.Protector;
 import com.evolveum.midpoint.prism.delta.ObjectDelta;
+import com.evolveum.midpoint.prism.marshaller.ItemPathParser;
+import com.evolveum.midpoint.prism.marshaller.ItemPathSerializer;
 import com.evolveum.midpoint.prism.marshaller.JaxbDomHack;
 import com.evolveum.midpoint.prism.marshaller.ParsingMigrator;
 import com.evolveum.midpoint.prism.path.UniformItemPath;
@@ -121,6 +123,12 @@ public interface PrismContext {
 	@NotNull
 	PrismParserNoIO parserFor(@NotNull Element element);
 
+	/**
+	 * Returns an item path parser. (EXPERIMENTAL / TEMPORARY)
+	 */
+	@NotNull
+	ItemPathParser itemPathParser();
+
 	@NotNull
 	String detectLanguage(@NotNull File file) throws IOException;
 
@@ -168,6 +176,12 @@ public interface PrismContext {
 	 */
 	@NotNull
 	PrismSerializer<String> serializerFor(@NotNull String language);
+
+	/**
+	 * Returns an item path serializer. (EXPERIMENTAL / TEMPORARY)
+	 */
+	@NotNull
+	ItemPathSerializer itemPathSerializer();
 
 	/**
 	 * Creates a serializer for XML language.

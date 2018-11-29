@@ -69,6 +69,8 @@ public class PrismContextImpl implements PrismContext {
 	@NotNull private final PrismMarshaller prismMarshaller;
 	@NotNull private final BeanMarshaller beanMarshaller;
 	@NotNull private final BeanUnmarshaller beanUnmarshaller;
+	@NotNull private final ItemPathParser itemPathParser;
+	@NotNull private final ItemPathSerializer itemPathSerializer;
 	private ParsingMigrator parsingMigrator;
 	private PrismMonitor monitor = null;
 
@@ -100,6 +102,8 @@ public class PrismContextImpl implements PrismContext {
 		this.beanUnmarshaller = new BeanUnmarshaller(this, inspector);
 		this.prismMarshaller = new PrismMarshaller(beanMarshaller);
 		this.jaxbDomHack = new JaxbDomHack(lexicalProcessorRegistry.domProcessor(), this);
+		this.itemPathParser = new ItemPathParserImpl();
+		this.itemPathSerializer = new ItemPathSerializerImpl();
 
 		try {
 			configurePolyStringNormalizer(null);
@@ -329,6 +333,12 @@ public class PrismContextImpl implements PrismContext {
 
 	@NotNull
 	@Override
+	public ItemPathParser itemPathParser() {
+		return itemPathParser;
+	}
+
+	@NotNull
+	@Override
 	public String detectLanguage(@NotNull File file) throws IOException {
 		return lexicalProcessorRegistry.detectLanguage(file);
 	}
@@ -411,6 +421,12 @@ public class PrismContextImpl implements PrismContext {
 	@Override
 	public PrismSerializer<String> serializerFor(@NotNull String language) {
 		return new PrismSerializerImpl<>(new SerializerStringTarget(this, language), null, null, null, this);
+	}
+
+	@NotNull
+	@Override
+	public ItemPathSerializer itemPathSerializer() {
+		return itemPathSerializer;
 	}
 
 	@NotNull
